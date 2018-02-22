@@ -7,6 +7,8 @@
 #include <stdio.h>
 
 struct options {
+	char *app_id;
+	char *redirect_uri;
 	unsigned short auth_port;
 	bool help;
 };

@@ -13,7 +13,12 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
-#define LOGIN_URL \
+struct reqctx {
+	struct MHD_Connection *conn;
+	unsigned status;
+};
+
+#define AUTHORIZE_URL \
 	"https://login.microsoftonline.com/common/oauth2/v2.0/authorize?" \
 	"client_id=%s&" \
 	"scope=offline_access%%20files.readwrite&" \
@@ -30,6 +35,9 @@ static const bool url_reserved[CHAR_MAX] = {
 };
 
 static struct MHD_Daemon *httpd;
+static char auth_code[64];
+
+// http utility
 
 static char * percent_encode(const char *s)
 {
@@ -58,7 +66,91 @@ static char * percent_encode(const char *s)
 	return buf;
 }
 
-static struct MHD_Response * process_get_login(unsigned int *status)
+// response utility
+
+static struct MHD_Response * ok(struct reqctx *ctx, const char *msg)
+{
+	ctx->status = MHD_HTTP_OK;
+
+	return MHD_create_response_from_buffer(
+		strlen(msg),
+		(void *) msg,
+		MHD_RESPMEM_MUST_COPY
+	);
+}
+
+static struct MHD_Response * bad_request(struct reqctx *ctx, const char *reason)
+{
+	ctx->status = MHD_HTTP_BAD_REQUEST;
+
+	return MHD_create_response_from_buffer(
+		strlen(reason),
+		(void *) reason,
+		MHD_RESPMEM_MUST_COPY
+	);
+}
+
+static struct MHD_Response * internal_server_error(
+	struct reqctx *ctx,
+	const char *reason)
+{
+	ctx->status = MHD_HTTP_INTERNAL_SERVER_ERROR;
+
+	return MHD_create_response_from_buffer(
+		strlen(reason),
+		(void *) reason,
+		MHD_RESPMEM_MUST_COPY
+	);
+}
+
+static struct MHD_Response * redirect(struct reqctx *ctx, const char *location)
+{
+	struct MHD_Response *resp;
+
+	resp = MHD_create_response_from_buffer(0, NULL, MHD_RESPMEM_PERSISTENT);
+	if (!resp) {
+		return NULL;
+	}
+
+	if (MHD_add_response_header(resp, "Location", location) == MHD_NO) {
+		MHD_destroy_response(resp);
+		return NULL;
+	}
+
+	ctx->status = MHD_HTTP_SEE_OTHER;
+	return resp;
+}
+
+// response handlers
+
+static struct MHD_Response * process_authorization_code(struct reqctx *ctx)
+{
+	const char *code = MHD_lookup_connection_value(
+		ctx->conn,
+		MHD_GET_ARGUMENT_KIND,
+		"code"
+	);
+
+	if (!code) {
+		return bad_request(
+			ctx,
+			"<p>"
+			"No authorization code in the URL that was redirected by OneDrive."
+			"</p>"
+		);
+	} else if (strlen(code) >= sizeof(auth_code)) {
+		return bad_request(ctx, "<p>The authorization code is too long.</p>");
+	}
+
+	strcpy(auth_code, code);
+
+	return ok(
+		ctx,
+		"<p>Authorization is completed. You can close the browser now.</p>"
+	);
+}
+
+static struct MHD_Response * process_get_login(struct reqctx *ctx)
 {
 	const struct options *opts = option_get();
 	char *redirect_uri, *url;
@@ -68,42 +160,29 @@ static struct MHD_Response * process_get_login(unsigned int *status)
 	// setup sign-in url
 	redirect_uri = percent_encode(opts->redirect_uri);
 	if (!redirect_uri) {
-		fprintf(stderr, "insufficient memory for encoding redirect uri\n");
-		return NULL;
+		return internal_server_error(
+			ctx,
+			"<p>insufficient memory for encoding redirect uri</p>"
+		);
 	}
 
-	res = snprintf(NULL, 0, LOGIN_URL, opts->app_id, redirect_uri) + 1;
+	res = snprintf(NULL, 0, AUTHORIZE_URL, opts->app_id, redirect_uri) + 1;
 	url = malloc(res);
 
 	if (!url) {
-		fprintf(stderr, "insufficient memory for login url\n");
 		free(redirect_uri);
-		return NULL;
+		return internal_server_error(
+			ctx,
+			"insufficient memory for login url\n"
+		);
 	}
 
-	snprintf(url, res, LOGIN_URL, opts->app_id, redirect_uri);
+	snprintf(url, res, AUTHORIZE_URL, opts->app_id, redirect_uri);
 	free(redirect_uri);
 
-	// setup response
-	resp = MHD_create_response_from_buffer(0, NULL, MHD_RESPMEM_PERSISTENT);
-	if (!resp) {
-		fprintf(
-			stderr,
-			"failed to create response for redirect to login page\n");
-		free(url);
-		return NULL;
-	}
-
-	res = MHD_add_response_header(resp, "Location", url);
+	// redirect
+	resp = redirect(ctx, url);
 	free(url);
-
-	if (res == MHD_NO) {
-		fprintf(stderr, "failed to set redirect location\n");
-		MHD_destroy_response(resp);
-		return NULL;
-	}
-
-	*status = MHD_HTTP_SEE_OTHER;
 
 	return resp;
 }
@@ -118,26 +197,31 @@ static int process_request(
 	size_t *upload_data_size,
 	void **con_cls)
 {
+	struct reqctx ctx;
 	struct MHD_Response *resp;
-	unsigned int status;
 	int res;
 
 	// process request
-	status = MHD_HTTP_OK;
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.conn = connection;
+	ctx.status = MHD_HTTP_OK;
 
 	if (strcmp(url, "/") == 0) {
-		resp = process_get_login(&status);
+		resp = process_get_login(&ctx);
+	} else if (strcmp(url, "/authorization-code") == 0) {
+		resp = process_authorization_code(&ctx);
 	} else {
-		status = MHD_HTTP_NOT_FOUND;
+		ctx.status = MHD_HTTP_NOT_FOUND;
 		resp = MHD_create_response_from_buffer(0, NULL, MHD_RESPMEM_PERSISTENT);
 	}
 
 	if (!resp) {
+		fprintf(stderr, "failed to create response\n");
 		return MHD_NO;
 	}
 
 	// response
-	res = MHD_queue_response(connection, status, resp);
+	res = MHD_queue_response(connection, ctx.status, resp);
 	MHD_destroy_response(resp);
 
 	return res;

@@ -1,12 +1,13 @@
 #include "operation.h"
 #include "option.h"
 
-#include <fuse.h>
+#include <fuse_lowlevel.h>
 
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 
-static struct fuse_operations const ops = {
+static const struct fuse_lowlevel_ops ops = {
 	.init = operation_init,
 	.destroy = operation_destroy
 };
@@ -14,22 +15,71 @@ static struct fuse_operations const ops = {
 int main(int argc, char *argv[])
 {
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
-	struct options const *opts;
-	int res;
+	int res = EXIT_SUCCESS;
+	const struct options *opt;
+	struct fuse_session *fuse;
 
-	opts = option_init(&args);
-	if (!opts) {
-		return EXIT_FAILURE;
+	// parse arguments
+	if (!option_init(&args)) {
+		res = EXIT_FAILURE;
+		goto cleanup;
 	}
 
-	if (opts->help) {
-		option_print_usage(stdout, args.argv[0]);
-		fuse_opt_add_arg(&args, "--help"); // add it back to show fuse help
-		args.argv[0] = ""; // tell fuse don't print 'usage: ...' line
+	opt = option_get();
+
+	if (opt->fuse.show_help) {
+		option_usage(argv[0]);
+		goto cleanup_with_opt;
+	} else if (opt->fuse.show_version) {
+		printf("FUSE library version %s\n", fuse_pkgversion());
+		fuse_lowlevel_version();
+		goto cleanup_with_opt;
 	}
 
-	res = fuse_main(args.argc, args.argv, &ops, NULL);
+	// initialize fuse
+	fuse = fuse_session_new(&args, &ops, sizeof(ops), NULL);
+	if (!fuse) {
+		res = EXIT_FAILURE;
+		goto cleanup_with_opt;
+	}
+
+	if (fuse_set_signal_handlers(fuse) != 0) {
+		res = EXIT_FAILURE;
+		goto cleanup_with_fuse;
+	}
+
+	if (fuse_session_mount(fuse, opt->fuse.mountpoint) != 0) {
+		res = EXIT_FAILURE;
+		goto cleanup_with_signal;
+	}
+
+	// enter main loop
+	if (fuse_daemonize(opt->fuse.foreground) != 0) {
+		res = EXIT_FAILURE;
+		goto cleanup_with_mount;
+	}
+
+	if (opt->fuse.singlethread) {
+		res = fuse_session_loop(fuse);
+	} else {
+		res = fuse_session_loop_mt(fuse, opt->fuse.clone_fd);
+	}
+
+	// clean up
+	cleanup_with_mount:
+	fuse_session_unmount(fuse);
+
+	cleanup_with_signal:
+	fuse_remove_signal_handlers(fuse);
+
+	cleanup_with_fuse:
+	fuse_session_destroy(fuse);
+
+	cleanup_with_opt:
 	option_term();
+
+	cleanup:
+	fuse_opt_free_args(&args);
 
 	return res;
 }

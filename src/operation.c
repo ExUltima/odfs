@@ -1,19 +1,16 @@
 #include "operation.h"
 #include "auth.h"
 
-#include <stddef.h>
 #include <stdlib.h>
 
-void * operation_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
+void operation_init(void *userdata, struct fuse_conn_info *conn)
 {
 	if (!auth_start_listen()) {
 		exit(EXIT_FAILURE);
 	}
-
-	return NULL;
 }
 
-void operation_destroy(void *private_data)
+void operation_destroy(void *userdata)
 {
 	auth_stop_listen();
 }

@@ -158,7 +158,7 @@ static struct MHD_Response * process_get_login(struct reqctx *ctx)
 	struct MHD_Response *resp;
 
 	// setup sign-in url
-	redirect_uri = percent_encode(opts->redirect_uri);
+	redirect_uri = percent_encode(opts->app.redirect_uri);
 	if (!redirect_uri) {
 		return internal_server_error(
 			ctx,
@@ -166,7 +166,7 @@ static struct MHD_Response * process_get_login(struct reqctx *ctx)
 		);
 	}
 
-	res = snprintf(NULL, 0, AUTHORIZE_URL, opts->app_id, redirect_uri) + 1;
+	res = snprintf(NULL, 0, AUTHORIZE_URL, opts->app.app_id, redirect_uri) + 1;
 	url = malloc(res);
 
 	if (!url) {
@@ -177,7 +177,7 @@ static struct MHD_Response * process_get_login(struct reqctx *ctx)
 		);
 	}
 
-	snprintf(url, res, AUTHORIZE_URL, opts->app_id, redirect_uri);
+	snprintf(url, res, AUTHORIZE_URL, opts->app.app_id, redirect_uri);
 	free(redirect_uri);
 
 	// redirect
@@ -242,7 +242,7 @@ bool auth_start_listen(void)
 	// setup server address
 	addr.sin_family = AF_INET;
 	addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-	addr.sin_port = htons(option_get()->auth_port);
+	addr.sin_port = htons(option_get()->app.auth_port);
 
 	// start server
 	httpd = MHD_start_daemon(

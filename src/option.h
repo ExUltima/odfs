@@ -1,22 +1,24 @@
 #ifndef OPTION_H_INCLUDED
 #define OPTION_H_INCLUDED
 
-#include <fuse.h>
+#include <fuse_lowlevel.h>
 
 #include <stdbool.h>
-#include <stdio.h>
 
 struct options {
-	char *app_id;
-	char *redirect_uri;
-	unsigned short auth_port;
-	bool help;
+	struct fuse_cmdline_opts fuse;
+	struct {
+		char *app_id;
+		char *redirect_uri;
+		unsigned short auth_port;
+	} app;
 };
 
-struct options const * option_init(struct fuse_args *args);
+void option_usage(const char *prog);
+
+bool option_init(struct fuse_args *args);
 void option_term(void);
 
-void option_print_usage(FILE *output, char const *prog);
-struct options const * option_get(void);
+const struct options * option_get(void);
 
 #endif // OPTION_H_INCLUDED

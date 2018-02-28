@@ -1,6 +1,6 @@
 #include "option.h"
 
-#include <fuse.h>
+#include <fuse_lowlevel.h>
 
 #include <stddef.h>
 #include <stdio.h>
@@ -12,16 +12,14 @@
 
 static struct options opts;
 
-static struct fuse_opt const specs[] = {
-	{ "--app-id=%s", offsetof(struct options, app_id), 0},
-	{ "--redirect-uri=%s", offsetof(struct options, redirect_uri), 0},
-	{ "--auth-port=%hu", offsetof(struct options, auth_port), 0 },
-	{ "-h", offsetof(struct options, help), true },
-	{ "--help", offsetof(struct options, help), true },
+static const struct fuse_opt specs[] = {
+	{ "--app-id=%s", offsetof(struct options, app.app_id), 0},
+	{ "--redirect-uri=%s", offsetof(struct options, app.redirect_uri), 0},
+	{ "--auth-port=%hu", offsetof(struct options, app.auth_port), 0 },
 	FUSE_OPT_END
 };
 
-static char const * help_text =
+static const char * help_text =
 "OneDrive specific options:\n"
 "    --app-id=GUID          identifier of registered application to use, "
 "default is " DEFAULT_APP_ID "\n"
@@ -30,48 +28,64 @@ static char const * help_text =
 "    --auth-port=PORT       port to listen for OAuth authentication, "
 "default is 2300\n";
 
-struct options const * option_init(struct fuse_args *args)
+void option_usage(const char *prog)
+{
+	printf("usage: %s [options] <mountpoint>\n\n", prog);
+	printf("%s\n", help_text);
+	printf("FUSE specific options:\n");
+	fuse_cmdline_help();
+	fuse_lowlevel_help();
+}
+
+bool option_init(struct fuse_args *args)
 {
 	// prepare default values
-	opts.app_id = strdup(DEFAULT_APP_ID);
-	if (!opts.app_id) {
-		goto fail;
+	opts.app.app_id = strdup(DEFAULT_APP_ID);
+	if (!opts.app.app_id) {
+		fprintf(stderr, "failed to allocate default application id\n");
+		return false;
 	}
 
-	opts.redirect_uri = strdup(DEFAULT_REDIRECT_URI);
-	if (!opts.redirect_uri) {
-		goto fail;
+	opts.app.redirect_uri = strdup(DEFAULT_REDIRECT_URI);
+	if (!opts.app.redirect_uri) {
+		fprintf(stderr, "failed to allocate default redirect uri\n");
+		goto fail_with_appid;
 	}
 
-	opts.auth_port = 2300;
+	opts.app.auth_port = 2300;
 
 	// parse arguments
-	if (fuse_opt_parse(args, &opts, specs, NULL) == -1) {
-		goto fail;
+	if (fuse_parse_cmdline(args, &opts.fuse) != 0) {
+		goto fail_with_redirect_uri;
 	}
 
-	return &opts;
+	if (fuse_opt_parse(args, &opts.app, specs, NULL) == -1) {
+		goto fail_with_fuseopts;
+	}
 
-	// error handling
-	fail:
-	option_term();
+	return true;
 
-	return NULL;
+	// errors handling
+	fail_with_fuseopts:
+	free(opts.fuse.mountpoint);
+
+	fail_with_redirect_uri:
+	free(opts.app.redirect_uri);
+
+	fail_with_appid:
+	free(opts.app.app_id);
+
+	return false;
 }
 
 void option_term(void)
 {
-	free(opts.app_id);
-	free(opts.redirect_uri);
+	free(opts.app.app_id);
+	free(opts.app.redirect_uri);
+	free(opts.fuse.mountpoint);
 }
 
-void option_print_usage(FILE *output, char const *prog)
-{
-	fprintf(output, "usage: %s [options] <mountpoint>\n\n", prog);
-	fprintf(output, "%s\n", help_text);
-}
-
-struct options const * option_get(void)
+const struct options * option_get(void)
 {
 	return &opts;
 }

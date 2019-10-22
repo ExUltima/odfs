@@ -111,6 +111,8 @@ static bool init_signal(void)
 		goto fail_with_int;
 	}
 
+	return true;
+
 fail_with_int:
 	act.sa_handler = SIG_DFL;
 
@@ -276,6 +278,10 @@ int main(int argc, char *argv[])
 	} else if (opt->fuse.show_version) {
 		printf("FUSE library version %s\n", fuse_pkgversion());
 		fuse_lowlevel_version();
+		goto cleanup_with_opt;
+	} else if (!opt->fuse.mountpoint) {
+		fprintf(stderr, "no mount point specified\n");
+		res = EXIT_FAILURE;
 		goto cleanup_with_opt;
 	}
 

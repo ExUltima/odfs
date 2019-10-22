@@ -22,6 +22,8 @@ static int lastfd = -1;
 bool dispatcher_init(void)
 {
 	FD_ZERO(&fds);
+
+	return true;
 }
 
 void dispatcher_term(void)

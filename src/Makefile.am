@@ -5,9 +5,9 @@ mount_onedrive_SOURCES = \
 	auth.h \
 	dispatcher.c \
 	dispatcher.h \
+	fs.c \
+	fs.h \
 	main.c \
-	operation.c \
-	operation.h \
 	option.c \
 	option.h
 mount_onedrive_CFLAGS = \

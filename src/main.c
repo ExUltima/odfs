@@ -1,6 +1,6 @@
 #include "auth.h"
 #include "dispatcher.h"
-#include "operation.h"
+#include "fs.h"
 #include "option.h"
 
 #include <fuse_common.h>
@@ -19,8 +19,8 @@
 static struct fuse_session *fuse;
 
 static const struct fuse_lowlevel_ops ops = {
-	.init = operation_init,
-	.destroy = operation_destroy
+	.init = fs_init,
+	.destroy = fs_destroy
 };
 
 static void handle_signal(int sig)

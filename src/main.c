@@ -1,3 +1,4 @@
+#include "auth.h"
 #include "dispatcher.h"
 #include "operation.h"
 #include "option.h"
@@ -150,11 +151,18 @@ static bool init(struct fuse_args *args)
 		goto fail_with_signal;
 	}
 
-	if (!init_fuse(args)) {
+	if (!auth_init()) {
 		goto fail_with_dispatcher;
 	}
 
+	if (!init_fuse(args)) {
+		goto fail_with_auth;
+	}
+
 	return true;
+
+fail_with_auth:
+	auth_term();
 
 fail_with_dispatcher:
 	dispatcher_term();
@@ -182,6 +190,7 @@ static bool run(void)
 static void term(void)
 {
 	term_fuse();
+	auth_term();
 	dispatcher_term();
 	term_signal();
 }

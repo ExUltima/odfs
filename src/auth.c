@@ -235,7 +235,7 @@ static void cleanup_request(
 {
 }
 
-bool auth_start_listen(void)
+bool auth_init(void)
 {
 	struct sockaddr_in addr = { 0 };
 
@@ -267,7 +267,7 @@ bool auth_start_listen(void)
 	return true;
 }
 
-void auth_stop_listen(void)
+void auth_term(void)
 {
 	MHD_stop_daemon(httpd);
 }

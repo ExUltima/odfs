@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 
-bool auth_start_listen(void);
-void auth_stop_listen(void);
+bool auth_init(void);
+void auth_term(void);
 
 #endif // AUTH_H_INCLUDED

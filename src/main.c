@@ -1,7 +1,10 @@
 #include "auth.h"
+#include "client.h"
 #include "dispatcher.h"
 #include "fs.h"
 #include "option.h"
+
+#include <curl/curl.h>
 
 #include <fuse_common.h>
 #include <fuse_lowlevel.h>
@@ -143,16 +146,27 @@ static void term_signal(void)
 
 static bool init(struct fuse_args *args)
 {
-	if (!init_signal()) {
+	// external libraries
+	if (curl_global_init(CURL_GLOBAL_ALL | CURL_GLOBAL_ACK_EINTR) != 0) {
+		fprintf(stderr, "failed to initialize CURL\n");
 		return false;
+	}
+
+	// internal modules
+	if (!init_signal()) {
+		goto fail_with_curl;
 	}
 
 	if (!dispatcher_init()) {
 		goto fail_with_signal;
 	}
 
-	if (!auth_init()) {
+	if (!client_init()) {
 		goto fail_with_dispatcher;
+	}
+
+	if (!auth_init()) {
+		goto fail_with_client;
 	}
 
 	if (!init_fuse(args)) {
@@ -164,11 +178,17 @@ static bool init(struct fuse_args *args)
 fail_with_auth:
 	auth_term();
 
+fail_with_client:
+	client_term();
+
 fail_with_dispatcher:
 	dispatcher_term();
 
 fail_with_signal:
 	term_signal();
+
+fail_with_curl:
+	curl_global_cleanup();
 
 	return false;
 }
@@ -189,10 +209,15 @@ static bool run(void)
 
 static void term(void)
 {
+	// internal modules
 	term_fuse();
 	auth_term();
+	client_term();
 	dispatcher_term();
 	term_signal();
+
+	// external libraries
+	curl_global_cleanup();
 }
 
 static bool init_child(struct fuse_args *args)

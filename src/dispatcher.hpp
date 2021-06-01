@@ -1,5 +1,5 @@
-#ifndef DISPATCHER_H_INCLUDED
-#define DISPATCHER_H_INCLUDED
+#ifndef DISPATCHER_HPP
+#define DISPATCHER_HPP
 
 #include <stdbool.h>
 
@@ -12,4 +12,4 @@ void dispatcher_add(int fd, dispatcher_handler_t rh, dispatcher_handler_t wh);
 bool dispatcher_remove(int fd);
 int dispatcher_dispatch(void);
 
-#endif // DISPATCHER_H_INCLUDED
+#endif // DISPATCHER_HPP

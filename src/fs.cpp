@@ -1,4 +1,4 @@
-#include "fs.h"
+#include "fs.hpp"
 
 void fs_init(void *userdata, struct fuse_conn_info *conn)
 {

@@ -1,4 +1,4 @@
-#include "dispatcher.h"
+#include "dispatcher.hpp"
 
 #include <assert.h>
 #include <errno.h>

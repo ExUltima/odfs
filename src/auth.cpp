@@ -1,5 +1,11 @@
-#include "auth.h"
-#include "option.h"
+#include "auth.hpp"
+#include "option.hpp"
+
+#include <iomanip>
+#include <ios>
+#include <sstream>
+#include <string>
+#include <unordered_set>
 
 #include <microhttpd.h>
 
@@ -18,20 +24,9 @@ struct reqctx {
 	unsigned status;
 };
 
-#define AUTHORIZE_URL \
-	"https://login.microsoftonline.com/common/oauth2/v2.0/authorize?" \
-	"client_id=%s&" \
-	"scope=offline_access%%20files.readwrite&" \
-	"response_type=code&" \
-	"redirect_uri=%s"
-
-#define RESERVED(ch) [ch] = true
-
-static const bool url_reserved[CHAR_MAX] = {
-	RESERVED('!'), RESERVED('#'), RESERVED('$'), RESERVED('&'), RESERVED('\''),
-	RESERVED('('), RESERVED(')'), RESERVED('*'), RESERVED('+'), RESERVED(','),
-	RESERVED('/'), RESERVED(':'), RESERVED(';'), RESERVED('='), RESERVED('?'),
-	RESERVED('@'), RESERVED('['), RESERVED(']')
+static const std::unordered_set<char> url_reserved = {
+	'!', '#', '$', '&', '\'', '(', ')', '*', '+', ',', '/', ':', ';', '=', '?',
+	'@', '[', ']'
 };
 
 static struct MHD_Daemon *httpd;
@@ -39,31 +34,21 @@ static char auth_code[64];
 
 // http utility
 
-static char * percent_encode(const char *s)
+static std::string percent_encode(const char *s)
 {
-	size_t len, i;
-	char *buf;
+	std::stringstream r;
 
-	// prepare buffer
-	len = strlen(s);
-	buf = malloc(len * 3 + 1); // we need 3 character to represent 1 character
-
-	if (!buf) {
-		return NULL;
-	}
-
-	// encode
-	for (i = 0; *s; s++) {
-		if (!url_reserved[*s]) {
-			buf[i++] = *s;
+	for (; *s; s++) {
+		if (url_reserved.count(*s)) {
+			r << '%';
+			r << std::setfill('0') << std::setw(2) << std::right << std::hex;
+			r << static_cast<int>(*s);
 		} else {
-			sprintf(&buf[i], "%%%02x", *s);
-			i += 3;
+			r << *s;
 		}
 	}
 
-	buf[i] = 0;
-	return buf;
+	return r.str();
 }
 
 // response utility
@@ -153,41 +138,21 @@ static struct MHD_Response * process_authorization_code(struct reqctx *ctx)
 static struct MHD_Response * process_get_login(struct reqctx *ctx)
 {
 	const struct options *opts = option_get();
-	char *redirect_uri, *url;
-	int res;
-	struct MHD_Response *resp;
 
 	// setup sign-in url
-	redirect_uri = percent_encode(opts->app.redirect_uri);
-	if (!redirect_uri) {
-		return internal_server_error(
-			ctx,
-			"<p>insufficient memory for encoding redirect uri</p>"
-		);
-	}
+	std::stringstream url;
 
-	res = snprintf(NULL, 0, AUTHORIZE_URL, opts->app.app_id, redirect_uri) + 1;
-	url = malloc(res);
-
-	if (!url) {
-		free(redirect_uri);
-		return internal_server_error(
-			ctx,
-			"insufficient memory for login url\n"
-		);
-	}
-
-	snprintf(url, res, AUTHORIZE_URL, opts->app.app_id, redirect_uri);
-	free(redirect_uri);
+	url << "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?";
+	url << "client_id=" << opts->app.app_id << '&';
+	url << "scope=offline_access%20files.readwrite&";
+	url << "response_type=code&";
+	url << "redirect_uri=" << percent_encode(opts->app.redirect_uri);
 
 	// redirect
-	resp = redirect(ctx, url);
-	free(url);
-
-	return resp;
+	return redirect(ctx, url.str().c_str());
 }
 
-static int process_request(
+static MHD_Result process_request(
 	void *cls,
 	struct MHD_Connection *connection,
 	const char *url,
@@ -199,7 +164,7 @@ static int process_request(
 {
 	struct reqctx ctx;
 	struct MHD_Response *resp;
-	int res;
+	MHD_Result res;
 
 	// process request
 	memset(&ctx, 0, sizeof(ctx));

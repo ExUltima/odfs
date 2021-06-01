@@ -1,8 +1,8 @@
-#include "auth.h"
-#include "client.h"
-#include "dispatcher.h"
-#include "fs.h"
-#include "option.h"
+#include "auth.hpp"
+#include "client.hpp"
+#include "dispatcher.hpp"
+#include "fs.hpp"
+#include "option.hpp"
 
 #include <curl/curl.h>
 

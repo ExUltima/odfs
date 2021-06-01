@@ -1,5 +1,5 @@
-#ifndef OPTION_H_INCLUDED
-#define OPTION_H_INCLUDED
+#ifndef OPTION_HPP
+#define OPTION_HPP
 
 #include <fuse_lowlevel.h>
 
@@ -21,4 +21,4 @@ void option_term(void);
 
 const struct options * option_get(void);
 
-#endif // OPTION_H_INCLUDED
+#endif // OPTION_HPP

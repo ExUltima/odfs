@@ -1,4 +1,4 @@
-#include "option.h"
+#include "option.hpp"
 
 #include <fuse_lowlevel.h>
 

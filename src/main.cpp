@@ -1,8 +1,16 @@
 #include "auth.hpp"
 #include "client.hpp"
-#include "dispatcher.hpp"
 #include "fs.hpp"
+#include "io.hpp"
 #include "option.hpp"
+
+#include <boost/asio/error.hpp>
+#include <boost/asio/posix/stream_descriptor.hpp>
+#include <boost/asio/signal_set.hpp>
+#include <boost/system/error_code.hpp>
+
+#include <iostream>
+#include <ostream>
 
 #include <curl/curl.h>
 
@@ -19,129 +27,105 @@
 
 #include <unistd.h>
 
-static struct fuse_session *fuse;
+static fuse_session *session;
+static boost::asio::signal_set signals(asio, SIGINT, SIGTERM);
+static boost::asio::posix::stream_descriptor fuse(asio);
 
 static const struct fuse_lowlevel_ops ops = {
 	.init = fs_init,
 	.destroy = fs_destroy
 };
 
-static void handle_signal(int sig)
+static void handle_signal(boost::system::error_code const &ec, int sig)
 {
-	fuse_session_exit(fuse);
+	if (ec) {
+		if (ec.value() != boost::asio::error::operation_aborted) {
+			std::cerr << ec.message() << std::endl;
+		}
+	} else {
+		fuse_session_exit(session);
+	}
 }
 
-static int handle_fuse_read(int fd)
+static void handle_fuse_read(boost::system::error_code const &ec)
 {
+	if (ec) {
+		if (ec.value() != boost::asio::error::operation_aborted) {
+			std::cerr << ec.message() << std::endl;
+			fuse_session_exit(session);
+		}
+		return;
+	}
+
+	// read message
 	struct fuse_buf buf;
 	int r;
 
-	// read message
 	memset(&buf, 0, sizeof(buf));
 
-	r = fuse_session_receive_buf(fuse, &buf);
+	r = fuse_session_receive_buf(session, &buf);
 
 	if (r <= 0) {
 		if (r < 0) {
 			const char *m = strerror(abs(r));
-			fprintf(stderr, "failed to read FUSE message: %s\n", m);
+			std::cerr << "failed to read FUSE message: " << m << std::endl;
 		} else {
-			fuse_session_exit(fuse);
+			fuse_session_exit(session);
 		}
-		return r;
 	}
 
 	// process message
-	fuse_session_process_buf(fuse, &buf);
+	fuse_session_process_buf(session, &buf);
 	free(buf.mem);
 
-	return 0;
-}
-
-static int handle_fuse_write(int fd)
-{
-	return 0;
+	fuse.async_wait(
+		boost::asio::posix::descriptor_base::wait_read,
+		handle_fuse_read);
 }
 
 static bool init_fuse(struct fuse_args *args)
 {
-	fuse = fuse_session_new(args, &ops, sizeof(ops), NULL);
-	if (!fuse) {
+	session = fuse_session_new(args, &ops, sizeof(ops), NULL);
+	if (!session) {
 		fprintf(stderr, "failed to initialize FUSE\n");
 		return false;
 	}
 
-	if (fuse_session_mount(fuse, option_get()->fuse.mountpoint) < 0) {
+	if (fuse_session_mount(session, option_get()->fuse.mountpoint) < 0) {
 		fprintf(stderr, "mount failed\n");
 		goto fail_with_fuse;
 	}
 
-	dispatcher_add(fuse_session_fd(fuse), handle_fuse_read, handle_fuse_write);
+	try {
+		fuse.assign(fuse_session_fd(session));
+		fuse.async_wait(
+			boost::asio::posix::descriptor_base::wait_read,
+			handle_fuse_read);
+	} catch (...) {
+		fuse.release();
+		goto fail_with_fuse;
+	}
 
 	return true;
 
 fail_with_fuse:
-	fuse_session_destroy(fuse);
-	fuse = NULL;
+	fuse_session_destroy(session);
+	session = NULL;
 
 	return false;
 }
 
 static void term_fuse(void)
 {
-	dispatcher_remove(fuse_session_fd(fuse));
-
-	fuse_session_unmount(fuse);
-	fuse_session_destroy(fuse);
-
-	fuse = NULL;
-}
-
-static bool init_signal(void)
-{
-	struct sigaction act;
-
-	memset(&act, 0, sizeof(act));
-
-	act.sa_handler = handle_signal;
-
-	if (sigaction(SIGINT, &act, NULL) < 0) {
-		perror("failed to setup handler for SIGINT");
-		return false;
+	try {
+		fuse.release();
+	} catch (...) {
 	}
 
-	if (sigaction(SIGTERM, &act, NULL) < 0) {
-		perror("failed to setup handler for SIGTERM");
-		goto fail_with_int;
-	}
+	fuse_session_unmount(session);
+	fuse_session_destroy(session);
 
-	return true;
-
-fail_with_int:
-	act.sa_handler = SIG_DFL;
-
-	if (sigaction(SIGINT, &act, NULL) < 0) {
-		perror("failed to restore handler for SIGINT");
-	}
-
-	return false;
-}
-
-static void term_signal(void)
-{
-	struct sigaction act;
-
-	memset(&act, 0, sizeof(act));
-
-	act.sa_handler = SIG_DFL;
-
-	if (sigaction(SIGTERM, &act, NULL) < 0) {
-		perror("failed to restore handler for SIGTERM");
-	}
-
-	if (sigaction(SIGINT, &act, NULL) < 0) {
-		perror("failed to store handler for SIGINT");
-	}
+	session = NULL;
 }
 
 static bool init(struct fuse_args *args)
@@ -153,16 +137,8 @@ static bool init(struct fuse_args *args)
 	}
 
 	// internal modules
-	if (!init_signal()) {
-		goto fail_with_curl;
-	}
-
-	if (!dispatcher_init()) {
-		goto fail_with_signal;
-	}
-
 	if (!client_init()) {
-		goto fail_with_dispatcher;
+		goto fail_with_curl;
 	}
 
 	if (!auth_init()) {
@@ -181,12 +157,6 @@ fail_with_auth:
 fail_with_client:
 	client_term();
 
-fail_with_dispatcher:
-	dispatcher_term();
-
-fail_with_signal:
-	term_signal();
-
 fail_with_curl:
 	curl_global_cleanup();
 
@@ -195,14 +165,25 @@ fail_with_curl:
 
 static bool run(void)
 {
-	int r;
+	try {
+		signals.async_wait(handle_signal);
+	} catch (...) {
+		return false;
+	}
 
-	while (!fuse_session_exited(fuse)) {
-		r = dispatcher_dispatch();
-		if (r != 0) {
+	while (!fuse_session_exited(session)) {
+		try {
+			if (!asio.run_one()) {
+				signals.cancel();
+				return false;
+			}
+		} catch (...) {
+			signals.cancel();
 			return false;
 		}
 	}
+
+	signals.cancel();
 
 	return true;
 }
@@ -213,8 +194,6 @@ static void term(void)
 	term_fuse();
 	auth_term();
 	client_term();
-	dispatcher_term();
-	term_signal();
 
 	// external libraries
 	curl_global_cleanup();
@@ -245,6 +224,14 @@ static bool daemonize(struct fuse_args *args)
 		return false;
 	}
 
+	try {
+		asio.notify_fork(boost::asio::io_context::fork_prepare);
+	} catch (...) {
+		close(pipes[0]);
+		close(pipes[1]);
+		return false;
+	}
+
 	switch (fork()) {
 	case -1:
 		// failed
@@ -257,7 +244,12 @@ static bool daemonize(struct fuse_args *args)
 		// we are in the child
 		close(pipes[0]);
 
-		res = init_child(args);
+		try {
+			asio.notify_fork(boost::asio::io_context::fork_child);
+			res = init_child(args);
+		} catch (...) {
+			res = false;
+		}
 
 		if (write(pipes[1], &res, sizeof(res)) < 0) {
 			perror("failed to write background initialization status");
@@ -274,15 +266,23 @@ static bool daemonize(struct fuse_args *args)
 		// we are in the parent
 		close(pipes[1]);
 
-		switch (read(pipes[0], &res, sizeof(res))) {
-		case -1:
-			perror("failed to read background initialization status");
-			res = false;
-			break;
-		case sizeof(res):
-			break;
-		default:
-			fprintf(stderr, "got incompleted background initialization status");
+		try {
+			asio.notify_fork(boost::asio::io_context::fork_parent);
+
+			switch (read(pipes[0], &res, sizeof(res))) {
+			case -1:
+				perror("failed to read background initialization status");
+				res = false;
+				break;
+			case sizeof(res):
+				break;
+			default:
+				fprintf(
+					stderr,
+					"got incompleted background initialization status");
+				res = false;
+			}
+		} catch (...) {
 			res = false;
 		}
 
